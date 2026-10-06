@@ -4,6 +4,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as rds from "aws-cdk-lib/aws-rds";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as iam from "aws-cdk-lib/aws-iam";
 
 export class StoreBackendStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -80,6 +81,69 @@ export class StoreBackendStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
+
+    // S3 Cross-Region Replication destination
+    const replicaBucketArn = new cdk.CfnParameter(this, "ReplicaBucketArn", {
+      type: "String",
+      description: "ARN of the S3 bucket in the replica region",
+    });
+
+    // S3 Replication IAM Role
+    const replicationRole = new iam.Role(this, "S3ReplicationRole", {
+      assumedBy: new iam.ServicePrincipal("s3.amazonaws.com"),
+      description: "IAM role used by S3 for cross-region replication",
+    });
+
+    // Allow S3 to read replication configuration
+    // and list objects in the source bucket
+    replicationRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetReplicationConfiguration", "s3:ListBucket"],
+        resources: [imagesBucket.bucketArn],
+      }),
+    );
+
+    // Allow S3 to read object versions
+    replicationRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "s3:GetObjectVersionForReplication",
+          "s3:GetObjectVersionAcl",
+          "s3:GetObjectVersionTagging",
+        ],
+        resources: [`${imagesBucket.bucketArn}/*`],
+      }),
+    );
+
+    // Allow S3 to replicate objects
+    replicationRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "s3:ReplicateObject",
+          "s3:ReplicateDelete",
+          "s3:ReplicateTags",
+        ],
+        resources: [`${replicaBucketArn.valueAsString}/*`],
+      }),
+    );
+
+    // Configure Cross-Region Replication
+    const sourceBucket = imagesBucket.node.defaultChild as s3.CfnBucket;
+
+    sourceBucket.replicationConfiguration = {
+      role: replicationRole.roleArn,
+
+      rules: [
+        {
+          id: "ReplicateProductImages",
+          status: "Enabled",
+
+          destination: {
+            bucket: replicaBucketArn.valueAsString,
+          },
+        },
+      ],
+    };
 
     // DynamoDB - Orders
     const ordersTable = new dynamodb.Table(this, "OrdersTable", {
