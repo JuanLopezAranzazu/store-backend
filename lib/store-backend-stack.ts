@@ -61,8 +61,9 @@ export class StoreBackendStack extends cdk.Stack {
     // S3 - Product Images
     const imagesBucket = new s3.Bucket(this, "ProductImagesBucket", {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-
       encryption: s3.BucketEncryption.S3_MANAGED,
+
+      versioned: true,
 
       lifecycleRules: [
         {
@@ -77,7 +78,6 @@ export class StoreBackendStack extends cdk.Stack {
       ],
 
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-
       autoDeleteObjects: true,
     });
 
@@ -94,6 +94,8 @@ export class StoreBackendStack extends cdk.Stack {
       },
 
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
 
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -135,6 +137,32 @@ export class StoreBackendStack extends cdk.Stack {
 
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+
+    // RDS Read Replica
+    const readReplica = new rds.DatabaseInstanceReadReplica(
+      this,
+      "ProductCatalogReadReplica",
+      {
+        sourceDatabaseInstance: database,
+
+        instanceType: ec2.InstanceType.of(
+          ec2.InstanceClass.T3,
+          ec2.InstanceSize.MICRO,
+        ),
+
+        vpc,
+
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+        },
+
+        publiclyAccessible: false,
+
+        securityGroups: [databaseSecurityGroup],
+
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      },
+    );
 
     // EC2 - Temporary Order Processing
     const processingInstance = new ec2.Instance(
@@ -188,6 +216,10 @@ export class StoreBackendStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, "DatabasePort", {
       value: database.dbInstanceEndpointPort,
+    });
+
+    new cdk.CfnOutput(this, "ReadReplicaEndpoint", {
+      value: readReplica.dbInstanceEndpointAddress,
     });
 
     new cdk.CfnOutput(this, "ProcessingInstanceId", {
