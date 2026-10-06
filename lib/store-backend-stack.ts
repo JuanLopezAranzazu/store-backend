@@ -9,10 +9,7 @@ export class StoreBackendStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // --------------------------------------------------
     // VPC
-    // --------------------------------------------------
-
     const vpc = new ec2.Vpc(this, "StoreVpc", {
       ipAddresses: ec2.IpAddresses.cidr("10.0.0.0/16"),
       maxAzs: 2,
@@ -32,10 +29,36 @@ export class StoreBackendStack extends cdk.Stack {
       ],
     });
 
-    // --------------------------------------------------
-    // S3 - Product Images
-    // --------------------------------------------------
+    // EC2 Security Group
+    const processingSecurityGroup = new ec2.SecurityGroup(
+      this,
+      "ProcessingSecurityGroup",
+      {
+        vpc,
+        description: "Security group for order processing instance",
+        allowAllOutbound: true,
+      },
+    );
 
+    // RDS Security Group
+    const databaseSecurityGroup = new ec2.SecurityGroup(
+      this,
+      "DatabaseSecurityGroup",
+      {
+        vpc,
+        description: "Security group for PostgreSQL database",
+        allowAllOutbound: true,
+      },
+    );
+
+    // Allow EC2 to access PostgreSQL
+    databaseSecurityGroup.addIngressRule(
+      processingSecurityGroup,
+      ec2.Port.tcp(5432),
+      "Allow PostgreSQL access from order processing instance",
+    );
+
+    // S3 - Product Images
     const imagesBucket = new s3.Bucket(this, "ProductImagesBucket", {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
 
@@ -43,7 +66,7 @@ export class StoreBackendStack extends cdk.Stack {
 
       lifecycleRules: [
         {
-          id: "MoveOldImagesToIA",
+          id: "TransitionImagesToStandardIA",
           transitions: [
             {
               storageClass: s3.StorageClass.INFREQUENT_ACCESS,
@@ -54,13 +77,11 @@ export class StoreBackendStack extends cdk.Stack {
       ],
 
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+
       autoDeleteObjects: true,
     });
 
-    // --------------------------------------------------
     // DynamoDB - Orders
-    // --------------------------------------------------
-
     const ordersTable = new dynamodb.Table(this, "OrdersTable", {
       partitionKey: {
         name: "customerId",
@@ -77,10 +98,7 @@ export class StoreBackendStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // --------------------------------------------------
     // RDS PostgreSQL - Product Catalog
-    // --------------------------------------------------
-
     const database = new rds.DatabaseInstance(this, "ProductCatalogDatabase", {
       engine: rds.DatabaseInstanceEngine.postgres({
         version: rds.PostgresEngineVersion.VER_16,
@@ -96,6 +114,8 @@ export class StoreBackendStack extends cdk.Stack {
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
       },
+
+      securityGroups: [databaseSecurityGroup],
 
       publiclyAccessible: false,
 
@@ -116,20 +136,7 @@ export class StoreBackendStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // --------------------------------------------------
     // EC2 - Temporary Order Processing
-    // --------------------------------------------------
-
-    const processingSecurityGroup = new ec2.SecurityGroup(
-      this,
-      "ProcessingSecurityGroup",
-      {
-        vpc,
-        description: "Security group for order processing instance",
-        allowAllOutbound: true,
-      },
-    );
-
     const processingInstance = new ec2.Instance(
       this,
       "OrderProcessingInstance",
@@ -152,6 +159,7 @@ export class StoreBackendStack extends cdk.Stack {
         blockDevices: [
           {
             deviceName: "/dev/sdf",
+
             volume: ec2.BlockDeviceVolume.ebs(10, {
               encrypted: true,
               deleteOnTermination: true,
@@ -161,10 +169,7 @@ export class StoreBackendStack extends cdk.Stack {
       },
     );
 
-    // --------------------------------------------------
     // Outputs
-    // --------------------------------------------------
-
     new cdk.CfnOutput(this, "VpcId", {
       value: vpc.vpcId,
     });
